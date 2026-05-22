@@ -1,0 +1,20 @@
+[Unit]
+Description=MTProxy Dynamic Relay & Admin
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mtproxy-relay
+Group=mtproxy-relay
+WorkingDirectory=/opt/mtproxy-relay
+ExecStart=/opt/mtproxy-relay/bin/mtproxy-relay
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mtproxy-relay
+
+[Install]
+WantedBy=multi-user.target

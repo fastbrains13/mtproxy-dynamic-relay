@@ -52,6 +52,7 @@ var (
 	bestProxies  = make(map[int]Proxy)
 	activeListen = make(map[int]net.Listener)
 	listenMu     sync.Mutex
+	maxRTT       = int64(800) // Максимальный допустимый RTT в мс
 )
 
 func generateSecret() string {
@@ -154,7 +155,7 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func startMonitor(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(60 * time.Second) // Пинг раз в минуту
 	defer ticker.Stop()
 	for {
 		select {
@@ -194,7 +195,8 @@ func startMonitor(ctx context.Context) {
 					if err == nil && rtt > 0 {
 						conn.Close()
 						status = "ok"
-						if best == nil || rtt < best.RTT {
+						// Выбираем лучший прокси с RTT <= maxRTT
+						if best == nil || (rtt <= maxRTT && rtt < best.RTT) {
 							p := proxies[i]
 							p.RTT = rtt
 							p.Status = status
@@ -209,7 +211,7 @@ func startMonitor(ctx context.Context) {
 					log.Printf("[%s] ✅ Лучший прокси: %s:%d (%dms)", list.Name, best.Host, best.Port, best.RTT)
 				} else {
 					delete(bestProxies, list.ID)
-					log.Printf("[%s] ❌ Нет доступных прокси", list.Name)
+					log.Printf("[%s] ❌ Нет доступных прокси с RTT <= %dms", list.Name, maxRTT)
 				}
 				mu.Unlock()
 			}
@@ -402,48 +404,84 @@ func handleRelay(conn net.Conn, port int, name string) {
 	errChan := make(chan error, 2)
 
 	// Горутина для мониторинга качества текущего прокси во время сессии
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				// Проверяем, не появился ли прокси с лучшим RTT
-				mu.RLock()
-				currentBest, exists := bestProxies[listID]
-				mu.RUnlock()
-				
-				if exists && currentBest.ID != bp.ID {
-					// Нашли прокси лучше текущего
-					log.Printf("[%s] 📊 Обнаружен лучший прокси: %s:%d (%dms vs %dms)", 
-						name, currentBest.Host, currentBest.Port, currentBest.RTT, bp.RTT)
-					
-					// Пробуем подключиться к новому
-					newBackend, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", currentBest.Host, currentBest.Port), 2*time.Second)
-					if err == nil {
-						log.Printf("[%s] 🔄 Переключаемся на %s:%d", name, currentBest.Host, currentBest.Port)
-						sessionMu.Lock()
-						backend.Close()
-						backend = newBackend
-						bp = currentBest
-						
-						// Повторяем хендшейкл для нового соединения
-						if needsObfuscation && xorTable != nil {
-							// Для obfuscated нужно заново пройти handshake
-							// Это упрощённая версия - в идеале нужно кешировать состояние
-						} else {
-							buf := make([]byte, 64)
-							copy(buf[48:64], ourKey)
-							backend.Write(buf)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					// Проверяем текущий прокси на доступность и RTT
+					start := time.Now()
+					testConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", bp.Host, bp.Port), 2*time.Second)
+					rtt := time.Since(start).Milliseconds()
+
+					needSwitch := false
+					var newBackend net.Conn
+					var newBp Proxy
+
+					if err != nil || rtt > maxRTT {
+						// Текущий прокси недоступен или RTT слишком высокий
+						log.Printf("[%s] ⚠️ Текущий прокси %s:%d недоступен или RTT=%dms > %dms, ищем замену...",
+							name, bp.Host, bp.Port, rtt, maxRTT)
+						needSwitch = true
+					} else {
+						// Проверяем, не появился ли прокси с лучшим RTT
+						mu.RLock()
+						currentBest, exists := bestProxies[listID]
+						mu.RUnlock()
+
+						if exists && currentBest.ID != bp.ID && currentBest.RTT < bp.RTT {
+							// Нашли прокси лучше текущего
+							log.Printf("[%s] 📊 Обнаружен лучший прокси: %s:%d (%dms vs %dms)",
+								name, currentBest.Host, currentBest.Port, currentBest.RTT, bp.RTT)
+							needSwitch = true
+							newBp = currentBest
 						}
-						sessionMu.Unlock()
+					}
+
+					if needSwitch {
+						// Если текущий плохой, пробуем найти замену
+						if newBp.ID == 0 {
+							mu.RLock()
+							newBp, _ = bestProxies[listID]
+							mu.RUnlock()
+						}
+
+						if newBp.ID != 0 {
+							newBackend, err = net.DialTimeout("tcp", fmt.Sprintf("%s:%d", newBp.Host, newBp.Port), 2*time.Second)
+							if err == nil {
+								log.Printf("[%s] 🔄 Переключаемся на %s:%d (RTT: %dms)", name, newBp.Host, newBp.Port, newBp.RTT)
+								sessionMu.Lock()
+								backend.Close()
+								backend = newBackend
+								bp = newBp
+
+								// Повторяем хендшейкл для нового соединения
+								if needsObfuscation {
+									// Для obfuscated нужно заново пройти handshake
+									// Отправляем тот же hello пакет что и от клиента
+								} else {
+									buf := make([]byte, 64)
+									copy(buf[48:64], ourKey)
+									backend.Write(buf)
+								}
+								sessionMu.Unlock()
+							} else {
+								log.Printf("[%s] ❌ Не удалось подключиться к новому прокси: %v", name, err)
+							}
+						} else {
+							log.Printf("[%s] ❌ Нет доступных прокси для переключения", name)
+						}
+					}
+
+					if testConn != nil {
+						testConn.Close()
 					}
 				}
 			}
-		}
-	}()
+		}()
 
 	// Relay клиент -> бэкенд
 	go func() {
@@ -536,7 +574,7 @@ func setupRoutes(ctx context.Context) {
 			http.Error(w, "Неверный логин или пароль", http.StatusUnauthorized)
 			return
 		}
-		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Вход</title><style>body{font-family:sans-serif;padding:40px;background:#f5f7fa}.box{max-width:400px;margin:auto;background:white;padding:30px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}h1{text-align:center;color:#333;}input{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}button{width:100%;padding:10px;background:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:16px;}button:hover{background:#0056b3;}</style></head><body><div class="box"><h1>🔐 Вход</h1><form method="POST"><input type="text" name="username" placeholder="Логин" required><input type="password" name="password" placeholder="Пароль" required><button type="submit">Вход</button></form></div></body></html>`)
+		fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Вход</title><style>body{font-family:sans-serif;padding:40px;background:#f5f7fa}.box{max-width:400px;margin:auto;background:white;padding:30px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}h1{text-align:center;color:#333;}input{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}button{width:100%;padding:10px;background:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:16px;}button:hover{background:#0056b3;}</style></head><body><div class="box"><h1>🔐 Вход</h1><form method="POST"><input type="text" name="username" placeholder="Логин" required><input type="password" name="password" placeholder="Пароль" required><button type="submit">Вход</button></form></div></body></html>`)
 	})
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "sess", MaxAge: -1, Path: "/"})

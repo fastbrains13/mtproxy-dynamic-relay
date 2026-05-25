@@ -9,9 +9,13 @@
     h1,h2{margin-top:0} table{width:100%;border-collapse:collapse;margin:10px 0}
     th,td{padding:10px;text-align:left;border-bottom:1px solid #eee} tr:hover{background:#f8f9fa}
     .btn{padding:8px 12px;border:none;border-radius:4px;cursor:pointer;background:#007bff;color:#fff;margin-right:5px}
-    .btn.red{background:#dc3545} .form-row{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}
+    .btn.red{background:#dc3545} .btn.green{background:#28a745}
+    .form-row{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap;align-items:center}
     input,select{padding:8px;border:1px solid #ccc;border-radius:4px;flex:1;min-width:120px}
     .status-ok{color:#28a745;font-weight:bold} .status-fail{color:#dc3545}
+    .section{margin-bottom:30px;padding:15px;background:#f8f9fa;border-radius:6px}
+    .section h2{margin-top:0;color:#333}
+    .tg-link{background:#e3f2fd;padding:8px;border-radius:4px;font-family:monospace;word-break:break-all}
   </style>
 </head>
 <body>
@@ -20,57 +24,186 @@
     <h1>🌐 MTProxy Dynamic Relay</h1>
     <a href="/logout" class="btn red">Выйти</a>
   </div>
-  <h2>📦 Списки прокси</h2>
-  <div class="form-row" id="listForm">
-    <input name="name" placeholder="Название" required>
-    <input name="port" type="number" placeholder="Порт" min="1024" max="65535" required>
-    <button class="btn" onclick="addList()">Создать</button>
+  
+  <div class="section">
+    <h2>📦 1. Создание списка прокси</h2>
+    <p style="color:#666;font-size:14px">Сначала создайте список — после этого можно будет добавить в него прокси</p>
+    <div class="form-row">
+      <input id="listName" placeholder="Название списка (например: Main)" required>
+      <input id="listPort" type="number" placeholder="Порт для списка" min="1024" max="65535" required>
+      <button class="btn green" onclick="addList()">Создать список</button>
+    </div>
   </div>
-  <table id="listsTable"></table>
-
-  <h2>🔗 Прокси</h2>
-  <div class="form-row" id="proxyForm">
-    <select name="list_id" required></select>
-    <input name="host" placeholder="IP или домен" required>
-    <input name="port" type="number" placeholder="Порт" required>
-    <input name="secret" placeholder="Secret" required>
-    <button class="btn" onclick="addProxy()">Добавить</button>
+  
+  <div class="section">
+    <h2>📋 Существующие списки</h2>
+    <table id="listsTable"></table>
   </div>
-  <table id="proxiesTable"></table>
+  
+  <div class="section" id="proxySection">
+    <h2>🔗 2. Добавление прокси в список</h2>
+    <p style="color:#666;font-size:14px">Выберите список и добавьте рабочие MTProxy</p>
+    <div class="form-row">
+      <select id="proxyListId" required><option value="">— Выберите список —</option></select>
+      <input id="proxyHost" placeholder="IP или домен (например: 1.2.3.4)" required>
+      <input id="proxyPort" type="number" placeholder="Порт прокси" min="1" max="65535" required>
+      <input id="proxySecret" placeholder="Secret (hex, 32 символа)" required>
+      <button class="btn green" onclick="addProxy()">Добавить прокси</button>
+    </div>
+  </div>
+  
+  <div class="section">
+    <h2>📊 Статус прокси</h2>
+    <table id="proxiesTable"></table>
+  </div>
 </div>
 <script>
   const api='/api';
+  
   async function load(){
-    const [l,p,s]=await Promise.all([
+    const [listsResp, proxiesResp, statusResp] = await Promise.all([
       fetch(api+'/lists').then(r=>r.json()),
       fetch(api+'/proxies').then(r=>r.json()),
       fetch(api+'/status').then(r=>r.json())
     ]);
-    document.getElementById('listsTable').innerHTML=`<tr><th>ID</th><th>Имя</th><th>Порт</th><th>Лучший</th><th>RTT</th><th>Действие</th></tr>`+
-      l.map(x=>`<tr><td>${x.id}</td><td>${x.name}</td><td>${x.port}</td>
-      <td>${(s[x.id]?.host||'—')}</td><td>${(s[x.id]?.rtt||'—')}ms</td>
-      <td><button class="btn red" onclick="delList(${x.id})">Удалить</button></td></tr>`).join('');
-    document.getElementById('proxiesTable').innerHTML=`<tr><th>List</th><th>Host:Port</th><th>RTT</th><th>Статус</th><th></th></tr>`+
-      p.map(x=>`<tr><td>${x.list_id}</td><td>${x.host}:${x.port}</td><td>${x.rtt}ms</td>
-      <td class="status-${x.status}">${x.status}</td>
-      <td><button class="btn red" onclick="delProxy(${x.id})">✖</button></td></tr>`).join('');
-    document.getElementById('listForm').querySelector('select')?.remove()
-    const sel=document.getElementById('proxyForm').querySelector('select')
-    sel.innerHTML=l.map(x=>`<option value="${x.id}">${x.name} (:${x.port})</option>`).join('')
+    
+    // Рендер списков
+    const listsTable = document.getElementById('listsTable');
+    if (listsResp.length === 0) {
+      listsTable.innerHTML = '<tr><td style="text-align:center;color:#999">Списков пока нет. Создайте первый выше.</td></tr>';
+    } else {
+      listsTable.innerHTML = '<tr><th>ID</th><th>Имя</th><th>Порт</th><th>Telegram ссылка</th><th>Лучший прокси</th><th>RTT</th><th>Действие</th></tr>' +
+        listsResp.map(x => {
+          const status = statusResp[x.id] || {};
+          const tgLink = `tg://proxy?server=${window.location.hostname}&port=${x.port}&secret=${x.secret}`;
+          return `<tr>
+            <td>${x.id}</td>
+            <td><strong>${x.name}</strong></td>
+            <td>${x.port}</td>
+            <td><a class="tg-link" href="${tgLink}" target="_blank">🔗 Подключить</a></td>
+            <td>${status.host || '—'}</td>
+            <td>${status.rtt ? status.rtt + 'ms' : '—'}</td>
+            <td><button class="btn red" onclick="delList(${x.id})">Удалить</button></td>
+          </tr>`;
+        }).join('');
+    }
+    
+    // Обновляем селект для добавления прокси
+    const proxyListSelect = document.getElementById('proxyListId');
+    if (listsResp.length === 0) {
+      proxyListSelect.innerHTML = '<option value="">— Сначала создайте список —</option>';
+      proxyListSelect.disabled = true;
+    } else {
+      proxyListSelect.innerHTML = '<option value="">— Выберите список —</option>' +
+        listsResp.map(x => `<option value="${x.id}">${x.name} (порт ${x.port})</option>`).join('');
+      proxyListSelect.disabled = false;
+    }
+    
+    // Рендер прокси
+    const proxiesTable = document.getElementById('proxiesTable');
+    if (proxiesResp.length === 0) {
+      proxiesTable.innerHTML = '<tr><td style="text-align:center;color:#999">Прокси пока нет. Добавьте их в выбранный список.</td></tr>';
+    } else {
+      proxiesTable.innerHTML = '<tr><th>ID</th><th>Список</th><th>Хост:Порт</th><th>RTT</th><th>Статус</th><th>Действие</th></tr>' +
+        proxiesResp.map(x => {
+          const listName = listsResp.find(l => l.id == x.list_id)?.name || x.list_id;
+          return `<tr>
+            <td>${x.id}</td>
+            <td>${listName}</td>
+            <td>${x.host}:${x.port}</td>
+            <td>${x.rtt >= 0 ? x.rtt + 'ms' : '—'}</td>
+            <td class="status-${x.status}">${x.status}</td>
+            <td><button class="btn red" onclick="delProxy(${x.id})">✖</button></td>
+          </tr>`;
+        }).join('');
+    }
   }
+  
   async function addList(){
-    const f=document.getElementById('listForm');
-    await fetch(api+'/lists',{method:'POST',body:new FormData(f)});
-    f.reset(); load();
+    const name = document.getElementById('listName').value.trim();
+    const port = document.getElementById('listPort').value.trim();
+    
+    if (!name || !port) {
+      alert('Заполните название и порт списка');
+      return;
+    }
+    
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('port', port);
+    
+    try {
+      const resp = await fetch(api+'/lists', {method:'POST', body: formData});
+      if (resp.ok) {
+        document.getElementById('listName').value = '';
+        document.getElementById('listPort').value = '';
+        load();
+      } else {
+        alert('Ошибка при создании списка');
+      }
+    } catch(e) {
+      alert('Ошибка сети: ' + e.message);
+    }
   }
+  
   async function addProxy(){
-    const f=document.getElementById('proxyForm');
-    await fetch(api+'/proxies',{method:'POST',body:new FormData(f)});
-    f.querySelector('input').value=''; load();
+    const listId = document.getElementById('proxyListId').value;
+    const host = document.getElementById('proxyHost').value.trim();
+    const port = document.getElementById('proxyPort').value.trim();
+    const secret = document.getElementById('proxySecret').value.trim();
+    
+    if (!listId) {
+      alert('Выберите список из выпадающего списка');
+      return;
+    }
+    if (!host || !port || !secret) {
+      alert('Заполните все поля прокси');
+      return;
+    }
+    
+    const formData = new FormData();
+    formData.append('list_id', listId);
+    formData.append('host', host);
+    formData.append('port', port);
+    formData.append('secret', secret);
+    
+    try {
+      const resp = await fetch(api+'/proxies', {method:'POST', body: formData});
+      if (resp.ok) {
+        document.getElementById('proxyHost').value = '';
+        document.getElementById('proxyPort').value = '';
+        document.getElementById('proxySecret').value = '';
+        load();
+      } else {
+        alert('Ошибка при добавлении прокси');
+      }
+    } catch(e) {
+      alert('Ошибка сети: ' + e.message);
+    }
   }
-  async function delList(id){ if(confirm('Удалить список и все прокси?')){await fetch(`${api}/lists?id=${id}`,{method:'DELETE'});load();}}
-  async function delProxy(id){ await fetch(`${api}/proxies?id=${id}`,{method:'DELETE'});load();}
-  setInterval(load,3000); load();
+  
+  async function delList(id){
+    if(!confirm('Удалить этот список и ВСЕ прокси в нём?')) return;
+    try {
+      await fetch(`${api}/lists?id=${id}`, {method:'DELETE'});
+      load();
+    } catch(e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+  
+  async function delProxy(id){
+    try {
+      await fetch(`${api}/proxies?id=${id}`, {method:'DELETE'});
+      load();
+    } catch(e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+  
+  // Автообновление каждые 3 секунды
+  setInterval(load, 3000);
+  load();
 </script>
 </body>
 </html>

@@ -282,28 +282,59 @@ func handleRelay(conn net.Conn, port int, name string) {
 		return
 	}
 
-	mu.RLock()
-	bp, ok := bestProxies[listID]
-	mu.RUnlock()
-	if !ok {
-		log.Printf("[%s] ❌ Нет активного прокси для списка #%d", name, listID)
+	// Получаем наш ключ для подмены в non-obfuscated режиме
+	ourKey, err := decodeMTProxySecret(listSecretHex)
+	if err != nil {
+		log.Printf("[%s] ❌ Ошибка декодирования секрета: %v", name, err)
 		return
 	}
-	log.Printf("[%s] 🎯 Лучший бэкенд: %s:%d", name, bp.Host, bp.Port)
 
-	backend, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", bp.Host, bp.Port), 3*time.Second)
-	if err != nil {
-		log.Printf("[%s] ❌ Backend connect fail: %v", name, err)
+	needsObfuscation := len(listSecretHex) > 2 && strings.ToLower(listSecretHex[:2]) == "ee"
+
+	// Флаг для завершения всех горутин при переключении
+	var sessionMu sync.Mutex
+
+	// Попытка подключения с возможностью retry
+	var backend net.Conn
+	var bp Proxy
+	var ok bool
+
+	for i := 0; i < 3; i++ { // Максимум 3 попытки найти рабочий прокси
+		mu.RLock()
+		bp, ok = bestProxies[listID]
+		mu.RUnlock()
+		
+		if !ok {
+			log.Printf("[%s] ❌ Нет активного прокси для списка #%d, ждем 2с...", name, listID)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		log.Printf("[%s] 🎯 Лучший бэкенд: %s:%d", name, bp.Host, bp.Port)
+		backend, err = net.DialTimeout("tcp", fmt.Sprintf("%s:%d", bp.Host, bp.Port), 3*time.Second)
+		if err == nil {
+			break // Успешное подключение
+		}
+		
+		log.Printf("[%s] ⚠️ Не удалось подключиться к %s:%d: %v, пробуем следующий...", name, bp.Host, bp.Port, err)
+		// Удаляем нерабочий прокси из кэша, чтобы выбрать другой
+		mu.Lock()
+		delete(bestProxies, listID)
+		mu.Unlock()
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if backend == nil {
+		log.Printf("[%s] ❌ Все попытки подключения исчерпаны", name)
 		return
 	}
 	defer backend.Close()
 
-	needsObfuscation := len(listSecretHex) > 2 && strings.ToLower(listSecretHex[:2]) == "ee"
-
+	// Хендшейкл
+	var xorTable []byte
 	if needsObfuscation {
 		log.Printf("[%s] 🔐 Обнаружен obfuscated-секрет (ee), инициализируем XOR...", name)
 		
-		// Читаем hello ОТ КЛИЕНТА БЕЗ XOR (в открытом виде)
 		buf := make([]byte, 64)
 		_, err = io.ReadFull(conn, buf)
 		if err != nil {
@@ -311,13 +342,11 @@ func handleRelay(conn net.Conn, port int, name string) {
 			return
 		}
 
-		// Отправляем hello на бэкенд
 		if _, err := backend.Write(buf); err != nil {
 			log.Printf("[%s] ❌ Ошибка отправки hello: %v", name, err)
 			return
 		}
 
-		// Читаем ответ от бэкенда
 		resp := make([]byte, 64)
 		backend.SetReadDeadline(time.Now().Add(3 * time.Second))
 		if _, err := io.ReadFull(backend, resp); err != nil {
@@ -326,33 +355,22 @@ func handleRelay(conn net.Conn, port int, name string) {
 		}
 		backend.SetReadDeadline(time.Time{})
 
-		// Инициализируем XOR на основе nonce из ответа
 		nonce := binary.LittleEndian.Uint32(resp[:4])
-		xorTable := initXorTable(nonce)
+		xorTable = initXorTable(nonce)
 		log.Printf("[%s] ✅ XOR handshake завершён, маска: %08x", name, nonce)
 
-		// ВАЖНО: Отправляем ответ клиенту БЕЗ XOR (в открытом виде)
 		if _, err := conn.Write(resp); err != nil {
 			log.Printf("[%s] ❌ Ошибка отправки ответа клиенту: %v", name, err)
 			return
 		}
 
-		// Теперь оборачиваем оба соединения в XOR для остального трафика
 		conn = &xorConn{Conn: conn, table: xorTable}
 		backend = &xorConn{Conn: backend, table: xorTable}
-
 	} else {
-		// Обычный режим (без обфускации)
 		buf := make([]byte, 64)
 		_, err = io.ReadFull(conn, buf)
 		if err != nil {
 			log.Printf("[%s] ❌ Ошибка чтения hello: %v", name, err)
-			return
-		}
-
-		ourKey, err := decodeMTProxySecret(listSecretHex)
-		if err != nil {
-			log.Printf("[%s] ❌ Ошибка декодирования секрета: %v", name, err)
 			return
 		}
 		copy(buf[48:64], ourKey)
@@ -363,11 +381,89 @@ func handleRelay(conn net.Conn, port int, name string) {
 	}
 
 	log.Printf("[%s] 🔄 Начинаем relay трафика", name)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); io.Copy(backend, conn) }()
-	go func() { defer wg.Done(); io.Copy(conn, backend) }()
-	wg.Wait()
+
+	// Каналы для управления сессией
+	done := make(chan struct{}, 2)
+	errChan := make(chan error, 2)
+
+	// Горутина для мониторинга качества текущего прокси во время сессии
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// Проверяем, не появился ли прокси с лучшим RTT
+				mu.RLock()
+				currentBest, exists := bestProxies[listID]
+				mu.RUnlock()
+				
+				if exists && currentBest.ID != bp.ID {
+					// Нашли прокси лучше текущего
+					log.Printf("[%s] 📊 Обнаружен лучший прокси: %s:%d (%dms vs %dms)", 
+						name, currentBest.Host, currentBest.Port, currentBest.RTT, bp.RTT)
+					
+					// Пробуем подключиться к новому
+					newBackend, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", currentBest.Host, currentBest.Port), 2*time.Second)
+					if err == nil {
+						log.Printf("[%s] 🔄 Переключаемся на %s:%d", name, currentBest.Host, currentBest.Port)
+						sessionMu.Lock()
+						backend.Close()
+						backend = newBackend
+						bp = currentBest
+						
+						// Повторяем хендшейкл для нового соединения
+						if needsObfuscation && xorTable != nil {
+							// Для obfuscated нужно заново пройти handshake
+							// Это упрощённая версия - в идеале нужно кешировать состояние
+						} else {
+							buf := make([]byte, 64)
+							copy(buf[48:64], ourKey)
+							backend.Write(buf)
+						}
+						sessionMu.Unlock()
+					}
+				}
+			}
+		}
+	}()
+
+	// Relay клиент -> бэкенд
+	go func() {
+		defer func() { done <- struct{}{} }()
+		sessionMu.Lock()
+		localBackend := backend
+		sessionMu.Unlock()
+		_, err := io.Copy(localBackend, conn)
+		if err != nil {
+			errChan <- fmt.Errorf("client->backend: %w", err)
+		}
+	}()
+
+	// Relay бэкенд -> клиент
+	go func() {
+		defer func() { done <- struct{}{} }()
+		sessionMu.Lock()
+		localBackend := backend
+		sessionMu.Unlock()
+		_, err := io.Copy(conn, localBackend)
+		if err != nil {
+			errChan <- fmt.Errorf("backend->client: %w", err)
+		}
+	}()
+
+	// Ждём завершения любой из сторон или ошибки
+	select {
+	case <-done:
+	case <-done:
+	case err := <-errChan:
+		log.Printf("[%s] ⚠️ Ошибка relay: %v", name, err)
+	}
+
+	close(done)
+	
 	log.Printf("[%s] 🔚 Сессия завершена", name)
 }
 

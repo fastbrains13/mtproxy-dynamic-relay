@@ -1,4 +1,4 @@
-module github.com/yourname/mtproxy-relay
+module github.com/fastbrains13/mtproxy-dynamic-relay
 
 go 1.21
 

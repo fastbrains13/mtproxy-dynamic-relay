@@ -298,21 +298,26 @@ func handleRelay(conn net.Conn, port int, name string) {
 	}
 	defer backend.Close()
 
-	buf := make([]byte, 64)
-	_, err = io.ReadFull(conn, buf)
-	if err != nil {
-		log.Printf("[%s] ❌ Ошибка чтения hello: %v", name, err)
-		return
-	}
-
 	needsObfuscation := len(listSecretHex) > 2 && strings.ToLower(listSecretHex[:2]) == "ee"
 
 	if needsObfuscation {
 		log.Printf("[%s] 🔐 Обнаружен obfuscated-секрет (ee), инициализируем XOR...", name)
+		
+		// Читаем hello ОТ КЛИЕНТА БЕЗ XOR (в открытом виде)
+		buf := make([]byte, 64)
+		_, err = io.ReadFull(conn, buf)
+		if err != nil {
+			log.Printf("[%s] ❌ Ошибка чтения hello: %v", name, err)
+			return
+		}
+
+		// Отправляем hello на бэкенд
 		if _, err := backend.Write(buf); err != nil {
 			log.Printf("[%s] ❌ Ошибка отправки hello: %v", name, err)
 			return
 		}
+
+		// Читаем ответ от бэкенда
 		resp := make([]byte, 64)
 		backend.SetReadDeadline(time.Now().Add(3 * time.Second))
 		if _, err := io.ReadFull(backend, resp); err != nil {
@@ -320,12 +325,31 @@ func handleRelay(conn net.Conn, port int, name string) {
 			return
 		}
 		backend.SetReadDeadline(time.Time{})
+
+		// Инициализируем XOR на основе nonce из ответа
 		nonce := binary.LittleEndian.Uint32(resp[:4])
 		xorTable := initXorTable(nonce)
 		log.Printf("[%s] ✅ XOR handshake завершён, маска: %08x", name, nonce)
+
+		// ВАЖНО: Отправляем ответ клиенту БЕЗ XOR (в открытом виде)
+		if _, err := conn.Write(resp); err != nil {
+			log.Printf("[%s] ❌ Ошибка отправки ответа клиенту: %v", name, err)
+			return
+		}
+
+		// Теперь оборачиваем оба соединения в XOR для остального трафика
 		conn = &xorConn{Conn: conn, table: xorTable}
 		backend = &xorConn{Conn: backend, table: xorTable}
+
 	} else {
+		// Обычный режим (без обфускации)
+		buf := make([]byte, 64)
+		_, err = io.ReadFull(conn, buf)
+		if err != nil {
+			log.Printf("[%s] ❌ Ошибка чтения hello: %v", name, err)
+			return
+		}
+
 		ourKey, err := decodeMTProxySecret(listSecretHex)
 		if err != nil {
 			log.Printf("[%s] ❌ Ошибка декодирования секрета: %v", name, err)
@@ -401,7 +425,7 @@ func setupRoutes(ctx context.Context) {
 			http.Error(w, "Неверный логин или пароль", http.StatusUnauthorized)
 			return
 		}
-		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Вход</title><style>body{font-family:sans-serif;padding:40px;background:#f5f7fa}.box{max-width:400px;margin:auto;background:#fff;padding:30px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1)}input{width:100%%;padding:10px;margin:10px 0;border:1px solid #ccc;border-radius:4px}button{width:100%%;padding:12px;background:#007bff;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:16px}</style></head><body><div class="box"><h2>🔐 Вход</h2><form method="post"><input name="username" placeholder="Логин" required><input type="password" name="password" placeholder="Пароль" required><button type="submit">Войти</button></form></div></body></html>`)
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Вход</title><style>body{font-family:sans-serif;padding:40px;background:#f5f7fa}.box{max-width:400px;margin:auto;background:white;padding:30px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}h1{text-align:center;color:#333;}input{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}button{width:100%;padding:10px;background:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:16px;}button:hover{background:#0056b3;}</style></head><body><div class="box"><h1>🔐 Вход</h1><form method="POST"><input type="text" name="username" placeholder="Логин" required><input type="password" name="password" placeholder="Пароль" required><button type="submit">Вход</button></form></div></body></html>`)
 	})
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "sess", MaxAge: -1, Path: "/"})

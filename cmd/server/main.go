@@ -378,6 +378,21 @@ func handleRelay(conn net.Conn, port int, name string) {
 			log.Printf("[%s] ❌ Ошибка отправки бэкенду: %v", name, err)
 			return
 		}
+		
+		// Читаем ответ от бэкенда (в non-obfuscated режиме сервер тоже отвечает)
+		resp := make([]byte, 64)
+		backend.SetReadDeadline(time.Now().Add(3 * time.Second))
+		n, err := io.ReadAtLeast(backend, resp, 1)
+		backend.SetReadDeadline(time.Time{})
+		if err != nil {
+			log.Printf("[%s] ⚠️ Ошибка/таймаут чтения ответа бэкенда: %v (прочитано %d байт)", name, err, n)
+			// Не прерываем, некоторые сервера могут не отвечать сразу
+		} else if n > 0 {
+			if _, err := conn.Write(resp[:n]); err != nil {
+				log.Printf("[%s] ❌ Ошибка отправки ответа клиенту: %v", name, err)
+				return
+			}
+		}
 	}
 
 	log.Printf("[%s] 🔄 Начинаем relay трафика", name)

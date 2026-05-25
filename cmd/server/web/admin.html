@@ -1,76 +1,529 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MTProxy Admin</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MTProxy Dynamic Relay</title>
   <style>
-    body{font-family:system-ui,sans-serif;margin:0;padding:20px;background:#f5f7fa}
-    .container{max-width:1000px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
-    h1,h2{margin-top:0} table{width:100%;border-collapse:collapse;margin:10px 0}
-    th,td{padding:10px;text-align:left;border-bottom:1px solid #eee} tr:hover{background:#f8f9fa}
-    .btn{padding:8px 12px;border:none;border-radius:4px;cursor:pointer;background:#007bff;color:#fff;margin-right:5px}
-    .btn.red{background:#dc3545} .form-row{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}
-    input,select{padding:8px;border:1px solid #ccc;border-radius:4px;flex:1;min-width:120px}
-    .status-ok{color:#28a745;font-weight:bold} .status-fail{color:#dc3545}
+    :root {
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --bg: #f3f4f6;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --text-secondary: #6b7280;
+      --border: #e5e7eb;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      background: var(--card-bg);
+      padding: 20px 30px;
+      border-radius: 16px;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: var(--danger-hover);
+      transform: translateY(-2px);
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 25px;
+      margin-bottom: 25px;
+      box-shadow: var(--shadow);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .card-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input, select {
+      padding: 12px 16px;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      flex: 1;
+      min-width: 150px;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      padding: 14px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: #f9fafb;
+    }
+
+    tr:hover {
+      background: #f9fafb;
+    }
+
+    .status-badge {
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .status-ok {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .status-fail {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .status-pending {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .rtt-value {
+      font-family: 'Courier New', monospace;
+      font-weight: 600;
+      color: var(--primary);
+    }
+
+    .rtt-good { color: var(--success); }
+    .rtt-warning { color: var(--warning); }
+    .rtt-bad { color: var(--danger); }
+
+    .best-proxy {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-secondary);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .stat-label {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-top: 5px;
+    }
+
+    .secret-display {
+      font-family: 'Courier New', monospace;
+      background: #f3f4f6;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    .copy-btn:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
   </style>
 </head>
 <body>
 <div class="container">
-  <div style="display:flex;justify-content:space-between;align-items:center">
+  <div class="header">
     <h1>🌐 MTProxy Dynamic Relay</h1>
-    <a href="/logout" class="btn red">Выйти</a>
+    <a href="/logout" class="btn btn-danger">🚪 Выйти</a>
   </div>
-  <h2>📦 Списки прокси</h2>
-  <div class="form-row" id="listForm">
-    <input name="name" placeholder="Название" required>
-    <input name="port" type="number" placeholder="Порт" min="1024" max="65535" required>
-    <button class="btn" onclick="addList()">Создать</button>
-  </div>
-  <table id="listsTable"></table>
 
-  <h2>🔗 Прокси</h2>
-  <div class="form-row" id="proxyForm">
-    <select name="list_id" required></select>
-    <input name="host" placeholder="IP или домен" required>
-    <input name="port" type="number" placeholder="Порт" required>
-    <input name="secret" placeholder="Secret" required>
-    <button class="btn" onclick="addProxy()">Добавить</button>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-value" id="totalLists">0</div>
+      <div class="stat-label">Списков прокси</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="totalProxies">0</div>
+      <div class="stat-label">Всего прокси</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="activeProxies">0</div>
+      <div class="stat-label">Активных прокси</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="avgRtt">—</div>
+      <div class="stat-label">Средний RTT</div>
+    </div>
   </div>
-  <table id="proxiesTable"></table>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">📦 Списки прокси</h2>
+    </div>
+    <div class="form-row" id="listForm">
+      <input name="name" placeholder="Название списка" required>
+      <input name="port" type="number" placeholder="Порт" min="1024" max="65535" required>
+      <button class="btn btn-primary" onclick="addList()">➕ Создать список</button>
+    </div>
+    <table id="listsTable"></table>
+  </div>
+  
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">🔗 Прокси серверы</h2>
+    </div>
+    <div class="form-row" id="proxyForm">
+      <select name="list_id" required></select>
+      <input name="host" placeholder="IP или домен" required>
+      <input name="port" type="number" placeholder="Порт" required>
+      <input name="secret" placeholder="Secret (hex/base64)" required>
+      <button class="btn btn-primary" onclick="addProxy()">➕ Добавить прокси</button>
+    </div>
+    <table id="proxiesTable"></table>
+  </div>
 </div>
+
 <script>
-  const api='/api';
-  async function load(){
-    const [l,p,s]=await Promise.all([
-      fetch(api+'/lists').then(r=>r.json()),
-      fetch(api+'/proxies').then(r=>r.json()),
-      fetch(api+'/status').then(r=>r.json())
-    ]);
-    document.getElementById('listsTable').innerHTML=`<tr><th>ID</th><th>Имя</th><th>Порт</th><th>Лучший</th><th>RTT</th><th>Действие</th></tr>`+
-      l.map(x=>`<tr><td>${x.id}</td><td>${x.name}</td><td>${x.port}</td>
-      <td>${(s[x.id]?.host||'—')}</td><td>${(s[x.id]?.rtt||'—')}ms</td>
-      <td><button class="btn red" onclick="delList(${x.id})">Удалить</button></td></tr>`).join('');
-    document.getElementById('proxiesTable').innerHTML=`<tr><th>List</th><th>Host:Port</th><th>RTT</th><th>Статус</th><th></th></tr>`+
-      p.map(x=>`<tr><td>${x.list_id}</td><td>${x.host}:${x.port}</td><td>${x.rtt}ms</td>
-      <td class="status-${x.status}">${x.status}</td>
-      <td><button class="btn red" onclick="delProxy(${x.id})">✖</button></td></tr>`).join('');
-    document.getElementById('listForm').querySelector('select')?.remove()
-    const sel=document.getElementById('proxyForm').querySelector('select')
-    sel.innerHTML=l.map(x=>`<option value="${x.id}">${x.name} (:${x.port})</option>`).join('')
+  const api = '/api';
+  let lastStatus = {};
+  let refreshCount = 0;
+
+  function formatRtt(rtt) {
+    if (!rtt && rtt !== 0) return '—';
+    const val = parseInt(rtt);
+    let cls = 'rtt-good';
+    if (val > 800) cls = 'rtt-bad';
+    else if (val > 400) cls = 'rtt-warning';
+    return '<span class="rtt-value ' + cls + '">' + val + 'ms</span>';
   }
-  async function addList(){
-    const f=document.getElementById('listForm');
-    await fetch(api+'/lists',{method:'POST',body:new FormData(f)});
-    f.reset(); load();
+
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+      alert('Секрет скопирован в буфер обмена!');
+    });
   }
-  async function addProxy(){
-    const f=document.getElementById('proxyForm');
-    await fetch(api+'/proxies',{method:'POST',body:new FormData(f)});
-    f.querySelector('input').value=''; load();
+
+  function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
-  async function delList(id){ if(confirm('Удалить список и все прокси?')){await fetch(`${api}/lists?id=${id}`,{method:'DELETE'});load();}}
-  async function delProxy(id){ await fetch(`${api}/proxies?id=${id}`,{method:'DELETE'});load();}
-  setInterval(load,3000); load();
+
+  async function load() {
+    refreshCount++;
+    try {
+      const [listsResp, proxiesResp, statusResp] = await Promise.all([
+        fetch(api + '/lists').then(r => r.json()),
+        fetch(api + '/proxies').then(r => r.json()),
+        fetch(api + '/status').then(r => r.json())
+      ]);
+
+      const lists = listsResp || [];
+      const proxies = proxiesResp || [];
+      const status = statusResp || {};
+      lastStatus = status;
+
+      document.getElementById('totalLists').textContent = lists.length;
+      document.getElementById('totalProxies').textContent = proxies.length;
+      
+      const activeCount = proxies.filter(p => p.status === 'ok').length;
+      document.getElementById('activeProxies').textContent = activeCount;
+
+      const rtts = proxies.filter(p => p.rtt && p.rtt > 0).map(p => p.rtt);
+      const avgRtt = rtts.length > 0 ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : null;
+      document.getElementById('avgRtt').textContent = avgRtt ? avgRtt + 'ms' : '—';
+
+      if (lists.length === 0) {
+        document.getElementById('listsTable').innerHTML = '<tr><td colspan="6"><div class="empty-state">Списки прокси не созданы. Создайте первый список выше.</div></td></tr>';
+      } else {
+        let listsHtml = '<thead><tr><th>ID</th><th>Название</th><th>Порт</th><th>Secret</th><th>Лучший прокси</th><th>RTT</th><th>Действия</th></tr></thead><tbody>';
+        for (let i = 0; i < lists.length; i++) {
+          const x = lists[i];
+          const bestInfo = status[x.id] || {};
+          const bestHost = bestInfo.host || '—';
+          const bestPort = bestInfo.port ? ':' + bestInfo.port : '';
+          const bestRtt = bestInfo.rtt !== undefined ? bestInfo.rtt : null;
+          
+          let bestDisplay = bestHost !== '—' 
+            ? '<span class="best-proxy">🎯 ' + bestHost + bestPort + '</span>'
+            : '<span style="color: #9ca3af;">Нет активного</span>';
+          
+          listsHtml += '<tr>' +
+            '<td><strong>#' + x.id + '</strong></td>' +
+            '<td>' + escapeHtml(x.name) + '</td>' +
+            '<td><strong>' + x.port + '</strong></td>' +
+            '<td><span class="secret-display">' + escapeHtml(x.secret) + '</span>' +
+            '<button class="copy-btn" onclick="copyToClipboard(\'' + escapeHtml(x.secret) + '\')">📋</button></td>' +
+            '<td>' + bestDisplay + '</td>' +
+            '<td>' + formatRtt(bestRtt) + '</td>' +
+            '<td><button class="btn btn-danger btn-sm" onclick="delList(' + x.id + ')">🗑️ Удалить</button></td>' +
+            '</tr>';
+        }
+        listsHtml += '</tbody>';
+        document.getElementById('listsTable').innerHTML = listsHtml;
+      }
+
+      if (proxies.length === 0) {
+        document.getElementById('proxiesTable').innerHTML = '<tr><td colspan="6"><div class="empty-state">Прокси не добавлены. Добавьте прокси в список выше.</div></td></tr>';
+      } else {
+        let proxiesHtml = '<thead><tr><th>ID</th><th>Список</th><th>Хост:Порт</th><th>Secret</th><th>RTT</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
+        for (let i = 0; i < proxies.length; i++) {
+          const x = proxies[i];
+          const listName = (lists.find(l => l.id === x.list_id) || {}).name || '#' + x.list_id;
+          
+          proxiesHtml += '<tr>' +
+            '<td>#' + x.id + '</td>' +
+            '<td><span class="best-proxy">' + escapeHtml(listName) + '</span></td>' +
+            '<td><strong>' + escapeHtml(x.host) + ':' + x.port + '</strong></td>' +
+            '<td><span class="secret-display" style="max-width:150px;display:inline-block;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(x.secret) + '</span></td>' +
+            '<td>' + formatRtt(x.rtt) + '</td>' +
+            '<td><span class="status-badge status-' + (x.status || 'pending') + '">' +
+              (x.status === 'ok' ? '✅ OK' : x.status === 'fail' ? '❌ Fail' : '⏳ Pending') +
+            '</span></td>' +
+            '<td><button class="btn btn-danger btn-sm" onclick="delProxy(' + x.id + ')">🗑️</button></td>' +
+            '</tr>';
+        }
+        proxiesHtml += '</tbody>';
+        document.getElementById('proxiesTable').innerHTML = proxiesHtml;
+      }
+
+      const sel = document.getElementById('proxyForm').querySelector('select');
+      if (sel) {
+        if (lists.length > 0) {
+          let options = '';
+          for (let i = 0; i < lists.length; i++) {
+            options += '<option value="' + lists[i].id + '">' + escapeHtml(lists[i].name) + ' (порт ' + lists[i].port + ')</option>';
+          }
+          sel.innerHTML = options;
+        } else {
+          sel.innerHTML = '<option value="">Сначала создайте список</option>';
+        }
+      }
+
+    } catch (error) {
+      console.error('Ошибка загрузки данных:', error);
+    }
+  }
+
+  async function addList() {
+    const f = document.getElementById('listForm');
+    const name = f.querySelector('[name="name"]').value.trim();
+    const port = f.querySelector('[name="port"]').value.trim();
+    
+    if (!name || !port) {
+      alert('Заполните все поля!');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('port', port);
+
+    try {
+      await fetch(api + '/lists', { method: 'POST', body: formData });
+      f.reset();
+      load();
+    } catch (error) {
+      alert('Ошибка создания списка: ' + error.message);
+    }
+  }
+
+  async function addProxy() {
+    const f = document.getElementById('proxyForm');
+    const listId = f.querySelector('[name="list_id"]').value;
+    const host = f.querySelector('[name="host"]').value.trim();
+    const port = f.querySelector('[name="port"]').value.trim();
+    const secret = f.querySelector('[name="secret"]').value.trim();
+
+    if (!listId || !host || !port || !secret) {
+      alert('Заполните все поля!');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('list_id', listId);
+    formData.append('host', host);
+    formData.append('port', port);
+    formData.append('secret', secret);
+
+    try {
+      await fetch(api + '/proxies', { method: 'POST', body: formData });
+      const inputs = f.querySelectorAll('input');
+      for (let i = 0; i < inputs.length; i++) {
+        inputs[i].value = '';
+      }
+      load();
+    } catch (error) {
+      alert('Ошибка добавления прокси: ' + error.message);
+    }
+  }
+
+  async function delList(id) {
+    if (!confirm('Вы уверены? Это удалит список и все связанные прокси!')) return;
+    try {
+      await fetch(api + '/lists?id=' + id, { method: 'DELETE' });
+      load();
+    } catch (error) {
+      alert('Ошибка удаления: ' + error.message);
+    }
+  }
+
+  async function delProxy(id) {
+    if (!confirm('Удалить этот прокси?')) return;
+    try {
+      await fetch(api + '/proxies?id=' + id, { method: 'DELETE' });
+      load();
+    } catch (error) {
+      alert('Ошибка удаления: ' + error.message);
+    }
+  }
+
+  setInterval(load, 3000);
+  load();
 </script>
 </body>
 </html>
